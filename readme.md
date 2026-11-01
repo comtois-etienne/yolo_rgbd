@@ -35,7 +35,9 @@ installing this project.
 Each image file must contain two arrays:
 
 * `orthophoto`: an `H x W x 3` RGB `uint8` array
-* `ndsm`: an `H x W` depth `uint8` array
+* `ndsm`: an `H x W` depth `uint8` array 
+
+For the compatibility with the sample model in the tests files, the height in meters of the ndsm is multiplied by 10. The maximum height is 25.5m and is represented by 255 (int). 
 
 Labels are ordinary Ultralytics text files next to the images. Dataset and
 label creation is provided by `pydsm`; pass the resulting `dataset.yaml` to
