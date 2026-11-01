@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yolo-rgbd"
+version = "0.1.0"
+description = "RGB-D YOLO training and prediction utilities using NPZ images"
+readme = "readme.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pandas",
+    "pillow",
+    "scikit-image",
+    "scipy",
+    "ultralytics==8.3.40",
+]
+
+[project.scripts]
+yolo-rgbd-train = "yolo_rgbd.training:main"
+
+[tool.setuptools.packages.find]
+include = ["yolo_rgbd*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
