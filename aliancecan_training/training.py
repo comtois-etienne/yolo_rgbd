@@ -1,4 +1,4 @@
-#!/home/comet/projects/def-mjmeurs/comet/venv_ultralytics/bin/env python
+#!~/venv_ultralytics/bin/env python
 
 """
 Dependencies:
