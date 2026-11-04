@@ -1,20 +1,47 @@
 from pathlib import Path
 
 import numpy as np
+import pytest
+from PIL import Image
 
 from yolo_rgbd.prediction import clean_prediction, load_npz
+from yolo_rgbd.monkey_patch import load_image
 
 
-FIXTURE = Path(__file__).parents[1] / 'test_files' / 'fold_1' / 'images'
+FIXTURE = Path(__file__).parents[1] / 'test_files'
+COMBINED_FIXTURE = FIXTURE / '40_299000_5037480 (2026-11-02).npz'
 
 
-def test_load_npz_returns_rgbd_image() -> None:
-    image_path = next(FIXTURE.glob('*.npz'))
+def test_load_npz_rejects_non_uint8_layers() -> None:
+    with pytest.raises(ValueError, match='uint8'):
+        load_npz(COMBINED_FIXTURE)
 
-    image = load_npz(image_path)
 
-    assert image.shape == (2000, 2000, 4)
-    assert image.dtype == np.uint8
+def test_load_image_accepts_four_channel_png(tmp_path: Path) -> None:
+    expected = np.zeros((4, 5, 4), dtype=np.uint8)
+    expected[:, :, 3] = 7
+    image_path = tmp_path / 'image.png'
+    Image.fromarray(expected, mode='RGBA').save(image_path)
+
+    image = load_image(image_path)
+
+    np.testing.assert_array_equal(image, expected)
+
+
+def test_load_image_mode_selects_channels(tmp_path: Path) -> None:
+    expected = np.zeros((4, 5, 4), dtype=np.uint8)
+    expected[:, :, 3] = 7
+    image_path = tmp_path / 'image.npz'
+    np.savez(image_path, data=expected)
+
+    rgb = load_image(image_path, mode='rgb')
+    depth = load_image(image_path, mode='depth')
+
+    assert rgb.shape == (4, 5, 3)
+    assert depth.shape == (4, 5, 3)
+    assert rgb.dtype == depth.dtype == np.uint8
+    np.testing.assert_array_equal(depth[:, :, 0], depth[:, :, 1])
+    np.testing.assert_array_equal(depth[:, :, 1], depth[:, :, 2])
 
 
 def test_clean_prediction_assigns_instances_and_classes() -> None:

@@ -12,15 +12,18 @@ IOU_THRESHOLD = 0.5
 MIN_MASK_SIZE = 100
 
 
-def load_npz(file_path: str | Path) -> np.ndarray:
-    """Load an RGB-D image from an NPZ file.
+def load_npz(file_path: str | Path, mode: str = 'rgbd') -> np.ndarray:
+    """
+    Load an RGB-D image from an NPZ file.
 
-    :param file_path: path to an NPZ file with ``orthophoto`` and ``ndsm``.
+    :param file_path: path to an NPZ file with ``data`` or ``orthophoto`` and
+        ``ndsm``.
+    :param mode: channel order, for example ``rgbd``, ``rgb`` or ``depth``.
     :return: uint8 image with shape ``(height, width, 4)``.
     """
-    from .monkey_patch import load_npz_image
+    from .monkey_patch import load_image
 
-    return load_npz_image(file_path)
+    return load_image(file_path, mode)
 
 
 def _load_yolo(model_path: str | Path) -> Any:
@@ -34,7 +37,8 @@ def predict_instances(
     image: np.ndarray | str | Path,
     confidence: float = CONFIDENCE_THRESHOLD,
 ) -> tuple[list[np.ndarray], list[float], list[int]]:
-    """Predict instance masks for an RGB or RGB-D array or NPZ image.
+    """
+    Predict instance masks for an RGB or RGB-D array or NPZ image.
 
     :param model_path: path to the YOLO segmentation model.
     :param image: image array or NPZ path.
@@ -60,7 +64,8 @@ def predict_from_array(
     pred_mode: str = 'rgbd',
     confidence: float = CONFIDENCE_THRESHOLD,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Predict and merge instance segmentation results for one image.
+    """
+    Predict and merge instance segmentation results for one image.
 
     :param model_paths: model path or paths whose predictions should be merged.
     :param image: RGB-D array with shape ``(H, W, 4)`` or RGB array with shape
@@ -141,7 +146,8 @@ def clean_prediction(
     confs: list[float],
     classes: list[int],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Merge predicted masks into instance, semantic, and confidence arrays.
+    """
+    Merge predicted masks into instance, semantic, and confidence arrays.
 
     :param masks: predicted binary masks.
     :param confs: confidence for each mask.

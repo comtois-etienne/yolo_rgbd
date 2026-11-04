@@ -32,10 +32,14 @@ installing this project.
 
 ## NPZ format
 
-Each image file must contain two arrays:
+Each NPZ image file must contain either one `data` array or two separate arrays:
 
-* `orthophoto`: an `H x W x 3` RGB `uint8` array
-* `ndsm`: an `H x W` depth `uint8` array 
+* `data`: an `H x W x 4` RGB-D `uint8` array, in RGB-D channel order
+* `orthophoto`: an `H x W x 3` RGB `uint8` array, together with
+  `ndsm`: an `H x W` depth `uint8` array
+
+Four-channel PNG images are also supported. All four layers must be `uint8`
+with values no greater than 255; values are not normalized during loading.
 
 For the compatibility with the sample model in the tests files, the height in meters of the ndsm is multiplied by 10. The maximum height is 25.5m and is represented by 255 (int). 
 
