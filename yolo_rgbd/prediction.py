@@ -10,6 +10,20 @@ import pandas as pd
 CONFIDENCE_THRESHOLD = 0.5
 IOU_THRESHOLD = 0.5
 MIN_MASK_SIZE = 100
+ImageInput = np.ndarray | str | Path
+Prediction = tuple[list[np.ndarray], list[float], list[int]]
+
+
+def load_yolo_model(model_path: str | Path) -> Any:
+    """
+    Load an Ultralytics YOLO model from a path.
+
+    :param model_path: path to the YOLO model weights or model definition.
+    :return: loaded Ultralytics YOLO model.
+    """
+    from ultralytics import YOLO
+
+    return YOLO(str(model_path))
 
 
 def load_npz(file_path: str | Path, mode: str = 'rgbd') -> np.ndarray:
@@ -26,40 +40,32 @@ def load_npz(file_path: str | Path, mode: str = 'rgbd') -> np.ndarray:
     return load_image(file_path, mode)
 
 
-def _load_yolo(model_path: str | Path) -> Any:
-    from ultralytics import YOLO
-
-    return YOLO(str(model_path))
-
-
 def predict_instances(
-    model_path: str | Path,
-    image: np.ndarray | str | Path,
+    model: Any,
+    image: ImageInput,
     confidence: float = CONFIDENCE_THRESHOLD,
-) -> tuple[list[np.ndarray], list[float], list[int]]:
+) -> Prediction:
     """
     Predict instance masks for an RGB or RGB-D array or NPZ image.
 
-    :param model_path: path to the YOLO segmentation model.
+    :param model: injected Ultralytics YOLO model.
     :param image: image array or NPZ path.
     :param confidence: confidence threshold for predictions.
     :return: masks, confidence scores, and class indices.
     """
     source = load_npz(image) if isinstance(image, (str, Path)) else image
-    results = _load_yolo(model_path).predict(source=source, conf=confidence)
+    results = model.predict(source=source, conf=confidence)
     if results[0].masks is None:
         return [np.zeros(source.shape[:2], dtype=np.uint16)], [0.0], [0]
-
     masks = results[0].masks.data.cpu().numpy()
-    shape = source.shape[:2]
-    masks = [_resize_mask(mask, shape) for mask in masks]
+    masks = [_resize_mask(mask, source.shape[:2]) for mask in masks]
     confs = results[0].boxes.conf.cpu().numpy().tolist()
     classes = [int(value) for value in results[0].boxes.cls.cpu().numpy()]
     return masks, confs, classes
 
 
 def predict_from_array(
-    model_paths: str | Path | list[str | Path],
+    models: Any | list[Any],
     image: np.ndarray,
     pred_mode: str = 'rgbd',
     confidence: float = CONFIDENCE_THRESHOLD,
@@ -67,22 +73,20 @@ def predict_from_array(
     """
     Predict and merge instance segmentation results for one image.
 
-    :param model_paths: model path or paths whose predictions should be merged.
-    :param image: RGB-D array with shape ``(H, W, 4)`` or RGB array with shape
-        ``(H, W, 3)``.
+    :param models: injected YOLO model or models whose predictions are merged.
+    :param image: RGB-D or RGB array.
     :param pred_mode: ``rgbd`` to use all channels or ``rgb`` to use RGB only.
     :param confidence: confidence threshold for each model prediction.
     :return: instance labels, semantic labels, and per-pixel confidence.
     """
+    model_list = models if isinstance(models, list) else [models]
     source = _select_prediction_channels(image, pred_mode)
-    paths = [model_paths] if isinstance(model_paths, (str, Path)) else model_paths
     masks: list[np.ndarray] = []
     confs: list[float] = []
     classes: list[int] = []
-    for model_path in paths:
-        model_masks, model_confs, model_classes = predict_instances(
-            model_path, source, confidence
-        )
+    for model in model_list:
+        prediction = predict_instances(model, source, confidence)
+        model_masks, model_confs, model_classes = prediction
         masks.extend(model_masks)
         classes.extend(model_classes)
         confs.extend(_adjust_confidences(model_confs, model_classes, confidence))

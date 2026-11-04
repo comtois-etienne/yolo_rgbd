@@ -61,16 +61,19 @@ images are accepted by the data loader.
 ## Prediction
 
 ```python
-from yolo_rgbd.prediction import predict_instances
+from yolo_rgbd.prediction import load_yolo_model, predict_instances
 
+model = load_yolo_model('runs/segment/weights/best.pt')
 masks, confidences, classes = predict_instances(
-    'runs/segment/weights/best.pt',
+    model,
     'path/to/image.npz',
 )
 ```
 
-Prediction also accepts an `H x W x 3` or `H x W x 4` NumPy array. Use
-`clean_prediction()` to merge model masks into instance, semantic, and
+Prediction accepts one `H x W x 3` or `H x W x 4` NumPy array at a time.
+Inject a loaded Ultralytics model into `predict_instances()` or
+`predict_from_array()`; these functions do not load model weights themselves.
+Use `clean_prediction()` to merge model masks into instance, semantic, and
 confidence arrays.
 
 ## Tests

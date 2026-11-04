@@ -3,6 +3,7 @@
 from .prediction import (
     ObjectDetector,
     clean_prediction,
+    load_yolo_model,
     load_npz,
     predict_from_array,
     predict_instances,
@@ -11,6 +12,7 @@ from .prediction import (
 __all__ = [
     'ObjectDetector',
     'clean_prediction',
+    'load_yolo_model',
     'load_npz',
     'predict_from_array',
     'predict_instances',
