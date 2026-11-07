@@ -109,7 +109,7 @@ def _select_prediction_channels(array: np.ndarray, pred_mode: str) -> np.ndarray
         return array[:, :, :3]
     if pred_mode == 'rgbd' and array.shape[2] == 4:
         return array
-    raise ValueError("pred_mode must be 'rgb' for RGB/RGB-D or 'rgbd' for RGB-D")
+    raise ValueError("pred_mode must be 'rgb' for RGB/RGB-D or 'rgbd' for RGB-D, or 'depth' for depth-only prediction")
 
 
 def _adjust_confidences(
