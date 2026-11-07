@@ -66,21 +66,21 @@ def predict_instances(
 
 def predict_from_array(
     models: Any | list[Any],
-    image: np.ndarray,
+    array: np.ndarray,
     pred_mode: str = 'rgbd',
     confidence: float = CONFIDENCE_THRESHOLD,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    Predict and merge instance segmentation results for one image.
+    Predict and merge instance segmentation results for one array.
 
     :param models: injected YOLO model or models whose predictions are merged.
-    :param image: RGB-D or RGB array.
+    :param array: RGB-D or RGB array.
     :param pred_mode: ``rgbd`` to use all channels or ``rgb`` to use RGB only.
     :param confidence: confidence threshold for each model prediction.
     :return: instance labels, semantic labels, and per-pixel confidence.
     """
     model_list = models if isinstance(models, list) else [models]
-    source = _select_prediction_channels(image, pred_mode)
+    source = _select_prediction_channels(array, pred_mode)
     masks: list[np.ndarray] = []
     confs: list[float] = []
     classes: list[int] = []
@@ -96,13 +96,19 @@ def predict_from_array(
     return instances, semantics, confidences
 
 
-def _select_prediction_channels(image: np.ndarray, pred_mode: str) -> np.ndarray:
-    if image.ndim != 3 or image.shape[2] not in (3, 4):
+def _select_prediction_channels(array: np.ndarray, pred_mode: str) -> np.ndarray:
+    if array.ndim != 3 or array.shape[2] not in (3, 4):
         raise ValueError('image must have shape (height, width, 3 or 4)')
+    if pred_mode == 'depth' and array.shape[2] != 4:
+        raise ValueError('depth prediction requires a four-channel RGB-D array')
+
+    if pred_mode == 'depth' or pred_mode == 'ddd':
+        d = array[:, :, 3]
+        return np.dstack((d, d, d))
     if pred_mode == 'rgb':
-        return image[:, :, :3]
-    if pred_mode == 'rgbd' and image.shape[2] == 4:
-        return image
+        return array[:, :, :3]
+    if pred_mode == 'rgbd' and array.shape[2] == 4:
+        return array
     raise ValueError("pred_mode must be 'rgb' for RGB/RGB-D or 'rgbd' for RGB-D")
 
 
@@ -208,9 +214,9 @@ class ObjectDetector:
         self.model = model
         self.results: Any = None
 
-    def detect(self, image: np.ndarray, verbose: bool = False, imgsz: int = 640) -> Any:
+    def detect(self, array: np.ndarray, verbose: bool = False, imgsz: int = 640) -> Any:
         """Run detection on an image."""
-        self.results = self.model(image, verbose=verbose, imgsz=imgsz)
+        self.results = self.model(array, verbose=verbose, imgsz=imgsz)
         return self.results
 
     def get_objs(self, score: float = 0.5) -> pd.DataFrame:
