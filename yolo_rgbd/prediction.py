@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from .utils import clean_instance_parts, nms, relabel, remove_small_masks
 CONFIDENCE_THRESHOLD = 0.5
 IOU_THRESHOLD = 0.5
 MIN_MASK_RATIO = 0.006 # 133 -> 10x10 ; 2000 -> 150x150
@@ -254,124 +255,6 @@ def _resize_mask(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     return zoom(mask, factors, order=0)
 
 
-def iou(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
-    """
-    Compute the Intersection over Union (IoU) between two binary masks.
-
-    :param mask_a: np.ndarray, first binary mask
-    :param mask_b: np.ndarray, second binary mask
-    :return: float, IoU value
-    """
-    intersection = np.logical_and(mask_a, mask_b).sum()
-    union = np.logical_or(mask_a, mask_b).sum()
-    if union == 0:
-        return 0.0
-    return intersection / union
-
-
-def nms(masks: list[np.ndarray], confidences: list[float], iou_threshold: float = 0.5) -> list[np.ndarray]:
-    """
-    Perform Non-Maximum Suppression (NMS) on a list of binary masks based on their IoU.
-
-    :param masks: list of np.ndarray, list of binary masks
-    :param confidences: list of float, list of confidence scores corresponding to each mask
-    :param iou_threshold: float, IoU threshold for suppression
-    :return: list of np.ndarray, list of masks after NMS (from most to least confident)
-    """
-    ordered_indices = np.argsort(confidences)[::-1] # high to low
-    masks = [masks[i] for i in ordered_indices]
-    confidences = [confidences[i] for i in ordered_indices]
-
-    kept_masks = []
-
-    while len(masks) > 0:
-        mask = masks.pop(0)
-        kept_masks.append(mask)
-        ious = [iou(mask, m) for m in masks]
-        masks = [m for i, m in enumerate(masks) if ious[i] < iou_threshold]
-
-    return kept_masks
-
-
-def _is_mask_touching_border(mask: np.ndarray, border_width=1, top=True, bottom=True, left=True, right=True) -> bool:
-    """
-    Check if a binary mask is touching the borders of the array.
-
-    :param mask: 2D numpy array (binary mask)
-    :param border_width: int, width of the border to check (default: 1)
-    :param top: bool, check top border (default: True)
-    :param bottom: bool, check bottom border (default: True)
-    :param left: bool, check left border (default: True)
-    :param right: bool, check right border (default: True)
-    :return: True if the mask touches any of the selected borders, False otherwise
-    """
-    end = (1 + border_width)
-    if top and np.any(mask[0:border_width, :]):
-        return True
-    if bottom and np.any(mask[-end:-1, :]):
-        return True
-    if left and np.any(mask[:, 0:border_width]):
-        return True
-    if right and np.any(mask[:, -end:-1]):
-        return True
-    return False
-
-
-def _are_overlapping(mask_a: np.ndarray, mask_b: np.ndarray) -> bool:
-    """
-    True if the two masks touch eachother by overlapping each other.
-
-    :param mask_a: 2D binary numpy array of the first mask
-    :param mask_b: 2D binary numpy array of the second mask
-    :return: True if the masks touch eachother, False otherwise
-    """
-    return np.sum(np.logical_and(mask_a, mask_b)) > 0
-
-
-from skimage.morphology import disk
-from skimage.morphology import dilation as binary_dilation
-
-def _remove_holes(mask: np.ndarray) -> np.ndarray:
-    """
-    Remove holes of any size from the binary mask.
-    The holes are merged with the labeled region.
-
-    :param mask: np.ndarray, binay mask (containing one instance)
-    :return: np.ndarray, the same binary mask with all holes removed
-    """
-    mask = mask.astype(int)
-    labeled = label(mask, background=-1)
-    mask = mask.astype(bool)
-
-    for v in np.unique(labeled):
-        hole = (labeled == v)
-        if _is_mask_touching_border(hole):
-            continue
-        hole_dilated = binary_dilation(hole, disk(1))
-        if _are_overlapping(mask, hole_dilated):
-            mask = np.logical_or(mask, hole)
-
-    return mask
-
-
-from skimage.measure import label
-
-def _get_biggest_mask(masks: np.array) -> np.ndarray:
-    """
-    Gives the biggest mask that is not the background (0).
-    Returns empty mask if no masks are found.
-
-    :param masks: split binary mask, or labeled mask
-    :return: binary mask of the biggest mask
-    """
-    masks = label(masks)
-    areas = [np.sum(masks == i) for i in range(1, masks.max() + 1)]
-    if len(areas) == 0:
-        return np.zeros_like(masks, dtype=bool)
-    biggest_mask = np.argmax(areas) + 1
-    return (masks == biggest_mask)
-
-
 def clean_prediction(
     masks: list[np.ndarray],
     confs: list[float],
@@ -395,8 +278,8 @@ def clean_prediction(
     instances = np.zeros(shape, dtype=np.uint16)
     for index, mask_index in enumerate(kept_indices, start=1):
         instances[kept_masks[index - 1] > 0] = index
-    instances = _remove_small_masks(instances, min_mask_ratio)
-    instances = _clean_instance_parts(instances)
+    instances = remove_small_masks(instances, min_mask_ratio)
+    instances = clean_instance_parts(instances)
 
     semantics = np.zeros(shape, dtype=np.uint16)
     confidence = np.zeros(shape, dtype=np.float32)
@@ -404,7 +287,7 @@ def clean_prediction(
         visible = instances == index
         semantics[visible] = classes[mask_index] + 1
         confidence[visible] = confs[mask_index]
-    return _relabel(instances), semantics, confidence
+    return relabel(instances), semantics, confidence
 
 
 def _mask_index(masks: list[np.ndarray], target: np.ndarray) -> int:
@@ -412,34 +295,6 @@ def _mask_index(masks: list[np.ndarray], target: np.ndarray) -> int:
         if mask is target:
             return index
     raise ValueError('NMS returned a mask that was not in the input')
-
-
-def _clean_instance_parts(instances: np.ndarray) -> np.ndarray:
-    cleaned = np.zeros_like(instances)
-    for index in np.unique(instances):
-        if index == 0:
-            continue
-        instance = _get_biggest_mask(instances == index)
-        cleaned[_remove_holes(instance)] = index
-    return cleaned
-
-
-def _remove_small_masks(instances: np.ndarray, min_mask_ratio: float) -> np.ndarray:
-    if not 0 <= min_mask_ratio <= 1:
-        raise ValueError('min_mask_ratio must be between 0 and 1')
-    minimum_area = instances.size * min_mask_ratio
-    result = instances.copy()
-    for index in np.unique(instances):
-        if index and np.count_nonzero(instances == index) < minimum_area:
-            result[instances == index] = 0
-    return result
-
-
-def _relabel(instances: np.ndarray) -> np.ndarray:
-    result = np.zeros_like(instances)
-    for new_index, old_index in enumerate(np.unique(instances)[1:], start=1):
-        result[instances == old_index] = new_index
-    return result
 
 
 class ObjectDetector:
