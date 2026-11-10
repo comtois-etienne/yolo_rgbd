@@ -76,6 +76,26 @@ Inject a loaded Ultralytics model into `predict_instances()` or
 Use `clean_prediction()` to merge model masks into instance, semantic, and
 confidence arrays.
 
+To save predictions for files or folders:
+
+```python
+from yolo_rgbd.prediction import predict_file, predict_folder
+
+predict_file(
+    'images/example.png',
+    'predictions/example.npz',
+    'runs/segment/weights/best.pt',
+)
+predict_folder('images', 'predictions', 'runs/segment/weights/best.pt')
+```
+
+The input can be a PNG or NPZ file, and the model can be a model path or an
+already loaded Ultralytics model. Each compressed output NPZ contains
+`instance_labels`, `semantic_labels`, and `confidence_labels` arrays. Use
+`read_prediction()` to read these three arrays back as
+`(instances, semantics, confidences)`. Folder predictions retain the input
+filename stem.
+
 ## Tests
 
 ```bash

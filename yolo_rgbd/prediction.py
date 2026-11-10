@@ -12,6 +12,8 @@ IOU_THRESHOLD = 0.5
 MIN_MASK_SIZE = 100
 ImageInput = np.ndarray | str | Path
 Prediction = tuple[list[np.ndarray], list[float], list[int]]
+MergedPrediction = tuple[np.ndarray, np.ndarray, np.ndarray]
+ModelInput = Any | str | Path
 
 
 def load_yolo_model(model_path: str | Path) -> Any:
@@ -35,9 +37,9 @@ def load_npz(file_path: str | Path, mode: str = 'rgbd') -> np.ndarray:
     :param mode: channel order, for example ``rgbd``, ``rgb`` or ``depth``.
     :return: uint8 image with shape ``(height, width, 4)``.
     """
-    from .monkey_patch import load_image
+    from .monkey_patch import read_image
 
-    return load_image(file_path, mode)
+    return read_image(file_path, mode)
 
 
 def predict_instances(
@@ -69,7 +71,7 @@ def predict_from_array(
     array: np.ndarray,
     pred_mode: str = 'rgbd',
     confidence: float = CONFIDENCE_THRESHOLD,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> MergedPrediction:
     """
     Predict and merge instance segmentation results for one array.
 
@@ -94,6 +96,116 @@ def predict_from_array(
     instances, semantics, confidences = clean_prediction(masks, confs, classes)
     confidences[confidences < confidence] *= 1 / confidence
     return instances, semantics, confidences
+
+
+def predict_folder(
+    input_dir: str | Path,
+    output_dir: str | Path,
+    model: ModelInput,
+    pred_mode: str = 'rgbd',
+    confidence: float = CONFIDENCE_THRESHOLD,
+) -> None:
+    """
+    Predict every PNG and NPZ image in a folder.
+
+    :param input_dir: directory containing PNG or NPZ images.
+    :param output_dir: directory where compressed prediction files are saved.
+    :param model: injected YOLO model or path to a YOLO model.
+    :param pred_mode: channel mode passed to ``predict_from_array``.
+    :param confidence: confidence threshold passed to ``predict_from_array``.
+    :return: None.
+    """
+    source_dir = Path(input_dir)
+    destination_dir = Path(output_dir)
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    loaded_model = _load_model_input(model)
+    for input_path in _image_paths(source_dir):
+        output_path = destination_dir / f'{input_path.stem}.npz'
+        predict_image(
+            input_path,
+            output_path,
+            loaded_model,
+            pred_mode=pred_mode,
+            confidence=confidence,
+        )
+
+
+def predict_image(
+    input_file_path: str | Path,
+    output_file_path: str | Path,
+    model: ModelInput,
+    pred_mode: str = 'rgbd',
+    confidence: float = CONFIDENCE_THRESHOLD,
+) -> None:
+    """
+    Predict one PNG or NPZ image and save its compressed prediction.
+
+    :param input_file_path: path to the PNG or NPZ input image.
+    :param output_file_path: path to the compressed NPZ prediction.
+    :param model: injected YOLO model or path to a YOLO model.
+    :param pred_mode: channel mode passed to ``predict_from_array``.
+    :param confidence: confidence threshold passed to ``predict_from_array``.
+    :return: None.
+    """
+    from .monkey_patch import read_image
+
+    image = read_image(input_file_path, pred_mode)
+    predictions = predict_from_array(
+        _load_model_input(model),
+        image,
+        pred_mode=pred_mode,
+        confidence=confidence,
+    )
+    _write_prediction(output_file_path, predictions)
+
+
+def _load_model_input(model: ModelInput) -> Any:
+    if isinstance(model, (str, Path)):
+        return load_yolo_model(model)
+    return model
+
+
+def _image_paths(input_dir: Path) -> list[Path]:
+    return sorted(
+        path for path in input_dir.iterdir()
+        if path.is_file() and path.suffix.lower() in {'.npz', '.png'}
+    )
+
+
+def _write_prediction(
+    output_file_path: str | Path,
+    prediction: MergedPrediction,
+) -> None:
+    instances, semantics, confidences = prediction
+    output_path = Path(output_file_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        output_path,
+        instance_labels=instances,
+        semantic_labels=semantics,
+        confidence_labels=confidences,
+    )
+
+
+def read_prediction(
+    npz_path: str | Path,
+) -> MergedPrediction:
+    """
+    Read a compressed prediction file.
+
+    :param npz_path: path to a compressed prediction NPZ file.
+    :return: instance labels, semantic labels, and confidence labels.
+    """
+    with np.load(npz_path, allow_pickle=False) as prediction:
+        keys = {'instance_labels', 'semantic_labels', 'confidence_labels'}
+        missing = keys - set(prediction.files)
+        if missing:
+            raise ValueError(f'Prediction is missing arrays: {sorted(missing)}')
+        return (
+            prediction['instance_labels'],
+            prediction['semantic_labels'],
+            prediction['confidence_labels'],
+        )
 
 
 def _select_prediction_channels(array: np.ndarray, pred_mode: str) -> np.ndarray:
@@ -132,23 +244,43 @@ def _resize_mask(mask: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     return zoom(mask, factors, order=0)
 
 
-def _mask_iou(left: np.ndarray, right: np.ndarray) -> float:
-    intersection = np.logical_and(left, right).sum()
-    union = np.logical_or(left, right).sum()
-    return float(intersection / union) if union else 0.0
+def iou(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
+    """
+    Compute the Intersection over Union (IoU) between two binary masks.
+
+    :param mask_a: np.ndarray, first binary mask
+    :param mask_b: np.ndarray, second binary mask
+    :return: float, IoU value
+    """
+    intersection = np.logical_and(mask_a, mask_b).sum()
+    union = np.logical_or(mask_a, mask_b).sum()
+    if union == 0:
+        return 0.0
+    return intersection / union
 
 
-def _nms(masks: list[np.ndarray], scores: list[float]) -> list[int]:
-    remaining = sorted(range(len(masks)), key=scores.__getitem__, reverse=True)
-    kept: list[int] = []
-    while remaining:
-        index = remaining.pop(0)
-        kept.append(index)
-        remaining = [
-            other for other in remaining
-            if _mask_iou(masks[index], masks[other]) < IOU_THRESHOLD
-        ]
-    return kept
+def nms(masks: list[np.ndarray], confidences: list[float], iou_threshold: float = 0.5) -> list[np.ndarray]:
+    """
+    Perform Non-Maximum Suppression (NMS) on a list of binary masks based on their IoU.
+
+    :param masks: list of np.ndarray, list of binary masks
+    :param confidences: list of float, list of confidence scores corresponding to each mask
+    :param iou_threshold: float, IoU threshold for suppression
+    :return: list of np.ndarray, list of masks after NMS (from most to least confident)
+    """
+    ordered_indices = np.argsort(confidences)[::-1] # high to low
+    masks = [masks[i] for i in ordered_indices]
+    confidences = [confidences[i] for i in ordered_indices]
+
+    kept_masks = []
+
+    while len(masks) > 0:
+        mask = masks.pop(0)
+        kept_masks.append(mask)
+        ious = [iou(mask, m) for m in masks]
+        masks = [m for i, m in enumerate(masks) if ious[i] < iou_threshold]
+
+    return kept_masks
 
 
 def clean_prediction(
@@ -167,7 +299,8 @@ def clean_prediction(
     if not masks:
         raise ValueError('At least one prediction mask is required')
     processed = [_largest_component(mask) for mask in masks]
-    kept_indices = _nms(processed, confs)
+    kept_masks = nms(processed, confs, IOU_THRESHOLD)
+    kept_indices = [_mask_index(processed, mask) for mask in kept_masks]
     shape = masks[0].shape
     instances = np.zeros(shape, dtype=np.uint16)
     for index, mask_index in enumerate(kept_indices, start=1):
@@ -180,6 +313,13 @@ def clean_prediction(
         semantics[visible] = classes[mask_index] + 1
         confidence[visible] = confs[mask_index]
     return _relabel(instances), semantics, confidence
+
+
+def _mask_index(masks: list[np.ndarray], target: np.ndarray) -> int:
+    for index, mask in enumerate(masks):
+        if mask is target:
+            return index
+    raise ValueError('NMS returned a mask that was not in the input')
 
 
 def _largest_component(mask: np.ndarray) -> np.ndarray:

@@ -4,8 +4,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from yolo_rgbd.prediction import clean_prediction, load_npz
-from yolo_rgbd.monkey_patch import load_image
+from yolo_rgbd.prediction import clean_prediction, load_npz, read_prediction
+from yolo_rgbd.monkey_patch import read_image
 
 
 FIXTURE = Path(__file__).parents[1] / 'test_files'
@@ -23,7 +23,7 @@ def test_load_image_accepts_four_channel_png(tmp_path: Path) -> None:
     image_path = tmp_path / 'image.png'
     Image.fromarray(expected, mode='RGBA').save(image_path)
 
-    image = load_image(image_path)
+    image = read_image(image_path)
 
     np.testing.assert_array_equal(image, expected)
 
@@ -34,8 +34,8 @@ def test_load_image_mode_selects_channels(tmp_path: Path) -> None:
     image_path = tmp_path / 'image.npz'
     np.savez(image_path, data=expected)
 
-    rgb = load_image(image_path, mode='rgb')
-    depth = load_image(image_path, mode='depth')
+    rgb = read_image(image_path, mode='rgb')
+    depth = read_image(image_path, mode='depth')
 
     assert rgb.shape == (4, 5, 3)
     assert depth.shape == (4, 5, 3)
@@ -52,3 +52,23 @@ def test_clean_prediction_assigns_instances_and_classes() -> None:
     assert instances.max() == 1
     assert np.all(semantics[2:12, 2:12] == 3)
     assert np.all(confidences[2:12, 2:12] == 0.8)
+
+
+def test_read_prediction_returns_saved_arrays(tmp_path: Path) -> None:
+    path = tmp_path / 'prediction.npz'
+    expected = (
+        np.ones((2, 2), dtype=np.uint16),
+        np.full((2, 2), 2, dtype=np.uint16),
+        np.full((2, 2), 0.5, dtype=np.float32),
+    )
+    np.savez_compressed(
+        path,
+        instance_labels=expected[0],
+        semantic_labels=expected[1],
+        confidence_labels=expected[2],
+    )
+
+    result = read_prediction(path)
+
+    for actual, wanted in zip(result, expected):
+        np.testing.assert_array_equal(actual, wanted)

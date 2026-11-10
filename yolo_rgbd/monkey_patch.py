@@ -7,7 +7,7 @@ from typing import Any
 
 import numpy as np
 
-def load_image(file_path: str | Path, mode: str = 'rgbd') -> np.ndarray:
+def read_image(file_path: str | Path, mode: str = 'rgbd') -> np.ndarray:
     """Load an RGB-D NPZ or PNG image in the channel order requested by ``mode``.
 
     :param file_path: path to an NPZ or four-channel PNG image.
@@ -70,12 +70,12 @@ def apply_monkey_patch(color_mode: str = 'rgbd') -> None:
         **kwargs: Any,
     ) -> np.ndarray | None:
         if str(file_path).lower().endswith('.npz'):
-            return load_image(file_path, color_mode)
+            return read_image(file_path, color_mode)
         return cv2.original_imread(file_path, *args, **kwargs)
 
     def fake_pil_open(file_path: str | Path, *args: Any, **kwargs: Any) -> Image.Image:
         if str(file_path).lower().endswith('.npz'):
-            image = load_image(file_path, color_mode)
+            image = read_image(file_path, color_mode)
             pil_mode = 'RGBA' if image.shape[2] == 4 else 'RGB'
             result = Image.fromarray(image, mode=pil_mode)
             result.format = 'NPZ'
