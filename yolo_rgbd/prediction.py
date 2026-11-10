@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 CONFIDENCE_THRESHOLD = 0.5
 IOU_THRESHOLD = 0.5
-MIN_MASK_SIZE = 100
+MIN_MASK_RATIO = 0.006 # 133 -> 10x10 ; 2000 -> 150x150
 ImageInput = np.ndarray | str | Path
 Prediction = tuple[list[np.ndarray], list[float], list[int]]
 MergedPrediction = tuple[np.ndarray, np.ndarray, np.ndarray]
@@ -71,6 +71,7 @@ def predict_from_array(
     array: np.ndarray,
     pred_mode: str = 'rgbd',
     confidence: float = CONFIDENCE_THRESHOLD,
+    min_mask_ratio: float = MIN_MASK_RATIO,
 ) -> MergedPrediction:
     """
     Predict and merge instance segmentation results for one array.
@@ -79,6 +80,7 @@ def predict_from_array(
     :param array: RGB-D or RGB array.
     :param pred_mode: ``rgbd`` to use all channels or ``rgb`` to use RGB only.
     :param confidence: confidence threshold for each model prediction.
+    :param min_mask_ratio: minimum mask area ratio to retain.
     :return: instance labels, semantic labels, and per-pixel confidence.
     """
     model_list = models if isinstance(models, list) else [models]
@@ -93,7 +95,9 @@ def predict_from_array(
         classes.extend(model_classes)
         confs.extend(_adjust_confidences(model_confs, model_classes, confidence))
 
-    instances, semantics, confidences = clean_prediction(masks, confs, classes)
+    instances, semantics, confidences = clean_prediction(
+        masks, confs, classes, min_mask_ratio
+    )
     confidences[confidences < confidence] *= 1 / confidence
     return instances, semantics, confidences
 
@@ -104,6 +108,7 @@ def predict_folder(
     model: ModelInput,
     pred_mode: str = 'rgbd',
     confidence: float = CONFIDENCE_THRESHOLD,
+    min_mask_ratio: float = MIN_MASK_RATIO,
 ) -> None:
     """
     Predict every PNG and NPZ image in a folder.
@@ -113,6 +118,7 @@ def predict_folder(
     :param model: injected YOLO model or path to a YOLO model.
     :param pred_mode: channel mode passed to ``predict_from_array``.
     :param confidence: confidence threshold passed to ``predict_from_array``.
+    :param min_mask_ratio: minimum mask area ratio passed to predictions.
     :return: None.
     """
     source_dir = Path(input_dir)
@@ -127,6 +133,7 @@ def predict_folder(
             loaded_model,
             pred_mode=pred_mode,
             confidence=confidence,
+            min_mask_ratio=min_mask_ratio,
         )
 
 
@@ -136,6 +143,7 @@ def predict_image(
     model: ModelInput,
     pred_mode: str = 'rgbd',
     confidence: float = CONFIDENCE_THRESHOLD,
+    min_mask_ratio: float = MIN_MASK_RATIO,
 ) -> None:
     """
     Predict one PNG or NPZ image and save its compressed prediction.
@@ -145,6 +153,7 @@ def predict_image(
     :param model: injected YOLO model or path to a YOLO model.
     :param pred_mode: channel mode passed to ``predict_from_array``.
     :param confidence: confidence threshold passed to ``predict_from_array``.
+    :param min_mask_ratio: minimum mask area ratio passed to predictions.
     :return: None.
     """
     from .monkey_patch import read_image
@@ -155,6 +164,7 @@ def predict_image(
         image,
         pred_mode=pred_mode,
         confidence=confidence,
+        min_mask_ratio=min_mask_ratio,
     )
     _write_prediction(output_file_path, predictions)
 
@@ -283,10 +293,90 @@ def nms(masks: list[np.ndarray], confidences: list[float], iou_threshold: float 
     return kept_masks
 
 
+def _is_mask_touching_border(mask: np.ndarray, border_width=1, top=True, bottom=True, left=True, right=True) -> bool:
+    """
+    Check if a binary mask is touching the borders of the array.
+
+    :param mask: 2D numpy array (binary mask)
+    :param border_width: int, width of the border to check (default: 1)
+    :param top: bool, check top border (default: True)
+    :param bottom: bool, check bottom border (default: True)
+    :param left: bool, check left border (default: True)
+    :param right: bool, check right border (default: True)
+    :return: True if the mask touches any of the selected borders, False otherwise
+    """
+    end = (1 + border_width)
+    if top and np.any(mask[0:border_width, :]):
+        return True
+    if bottom and np.any(mask[-end:-1, :]):
+        return True
+    if left and np.any(mask[:, 0:border_width]):
+        return True
+    if right and np.any(mask[:, -end:-1]):
+        return True
+    return False
+
+
+def _are_overlapping(mask_a: np.ndarray, mask_b: np.ndarray) -> bool:
+    """
+    True if the two masks touch eachother by overlapping each other.
+
+    :param mask_a: 2D binary numpy array of the first mask
+    :param mask_b: 2D binary numpy array of the second mask
+    :return: True if the masks touch eachother, False otherwise
+    """
+    return np.sum(np.logical_and(mask_a, mask_b)) > 0
+
+
+from skimage.morphology import disk
+from skimage.morphology import dilation as binary_dilation
+
+def _remove_holes(mask: np.ndarray) -> np.ndarray:
+    """
+    Remove holes of any size from the binary mask.
+    The holes are merged with the labeled region.
+
+    :param mask: np.ndarray, binay mask (containing one instance)
+    :return: np.ndarray, the same binary mask with all holes removed
+    """
+    mask = mask.astype(int)
+    labeled = label(mask, background=-1)
+    mask = mask.astype(bool)
+
+    for v in np.unique(labeled):
+        hole = (labeled == v)
+        if _is_mask_touching_border(hole):
+            continue
+        hole_dilated = binary_dilation(hole, disk(1))
+        if _are_overlapping(mask, hole_dilated):
+            mask = np.logical_or(mask, hole)
+
+    return mask
+
+
+from skimage.measure import label
+
+def _get_biggest_mask(masks: np.array) -> np.ndarray:
+    """
+    Gives the biggest mask that is not the background (0).
+    Returns empty mask if no masks are found.
+
+    :param masks: split binary mask, or labeled mask
+    :return: binary mask of the biggest mask
+    """
+    masks = label(masks)
+    areas = [np.sum(masks == i) for i in range(1, masks.max() + 1)]
+    if len(areas) == 0:
+        return np.zeros_like(masks, dtype=bool)
+    biggest_mask = np.argmax(areas) + 1
+    return (masks == biggest_mask)
+
+
 def clean_prediction(
     masks: list[np.ndarray],
     confs: list[float],
     classes: list[int],
+    min_mask_ratio: float = MIN_MASK_RATIO,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Merge predicted masks into instance, semantic, and confidence arrays.
@@ -294,18 +384,20 @@ def clean_prediction(
     :param masks: predicted binary masks.
     :param confs: confidence for each mask.
     :param classes: class index for each mask.
+    :param min_mask_ratio: minimum percentage of image area a mask must cover.
     :return: instance labels, semantic labels, and per-pixel confidence.
     """
     if not masks:
         raise ValueError('At least one prediction mask is required')
-    processed = [_largest_component(mask) for mask in masks]
-    kept_masks = nms(processed, confs, IOU_THRESHOLD)
-    kept_indices = [_mask_index(processed, mask) for mask in kept_masks]
+    kept_masks = nms(masks, confs, IOU_THRESHOLD)
+    kept_indices = [_mask_index(masks, mask) for mask in kept_masks]
     shape = masks[0].shape
     instances = np.zeros(shape, dtype=np.uint16)
     for index, mask_index in enumerate(kept_indices, start=1):
-        instances[processed[mask_index] > 0] = index
-    instances = _remove_small_masks(instances)
+        instances[kept_masks[index - 1] > 0] = index
+    instances = _remove_small_masks(instances, min_mask_ratio)
+    instances = _clean_instance_parts(instances)
+
     semantics = np.zeros(shape, dtype=np.uint16)
     confidence = np.zeros(shape, dtype=np.float32)
     for index, mask_index in enumerate(kept_indices, start=1):
@@ -322,20 +414,23 @@ def _mask_index(masks: list[np.ndarray], target: np.ndarray) -> int:
     raise ValueError('NMS returned a mask that was not in the input')
 
 
-def _largest_component(mask: np.ndarray) -> np.ndarray:
-    from skimage.measure import label
+def _clean_instance_parts(instances: np.ndarray) -> np.ndarray:
+    cleaned = np.zeros_like(instances)
+    for index in np.unique(instances):
+        if index == 0:
+            continue
+        instance = _get_biggest_mask(instances == index)
+        cleaned[_remove_holes(instance)] = index
+    return cleaned
 
-    labels = label(mask > 0)
-    if labels.max() == 0:
-        return np.zeros_like(mask, dtype=bool)
-    sizes = np.bincount(labels.ravel())
-    return labels == int(np.argmax(sizes[1:]) + 1)
 
-
-def _remove_small_masks(instances: np.ndarray) -> np.ndarray:
+def _remove_small_masks(instances: np.ndarray, min_mask_ratio: float) -> np.ndarray:
+    if not 0 <= min_mask_ratio <= 1:
+        raise ValueError('min_mask_ratio must be between 0 and 1')
+    minimum_area = instances.size * min_mask_ratio
     result = instances.copy()
     for index in np.unique(instances):
-        if index and np.count_nonzero(instances == index) < MIN_MASK_SIZE:
+        if index and np.count_nonzero(instances == index) < minimum_area:
             result[instances == index] = 0
     return result
 

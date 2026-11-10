@@ -54,6 +54,36 @@ def test_clean_prediction_assigns_instances_and_classes() -> None:
     assert np.all(confidences[2:12, 2:12] == 0.8)
 
 
+def test_clean_prediction_uses_minimum_area_ratio() -> None:
+    mask = np.zeros((10, 10), dtype=np.uint8)
+    mask[:2, :2] = 1
+
+    instances, semantics, confidences = clean_prediction(
+        [mask], [0.8], [2], min_mask_ratio=0.05
+    )
+
+    assert not instances.any()
+    assert not semantics.any()
+    assert not confidences.any()
+
+
+def test_clean_prediction_keeps_biggest_part_and_removes_holes() -> None:
+    mask = np.zeros((20, 20), dtype=np.uint8)
+    mask[2:12, 2:12] = 1
+    mask[5:7, 5:7] = 0
+    mask[15:17, 15:17] = 1
+
+    instances, semantics, confidences = clean_prediction(
+        [mask], [0.8], [2], min_mask_ratio=0.01
+    )
+
+    assert instances[3, 3] == 1
+    assert instances[5, 5] == 1
+    assert instances[15, 15] == 0
+    assert semantics[5, 5] == 3
+    assert np.isclose(confidences[5, 5], 0.8)
+
+
 def test_read_prediction_returns_saved_arrays(tmp_path: Path) -> None:
     path = tmp_path / 'prediction.npz'
     expected = (
