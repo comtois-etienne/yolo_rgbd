@@ -221,3 +221,4 @@ __marimo__/
 .ctx.md
 .DS_Store
 bak/*
+models/*
